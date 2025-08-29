@@ -12,27 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+mod history;
 mod host;
 mod sei;
 mod tendermint;
 
 pub use host::*;
-use risc0_steel::{BlockInput, Commitment, EvmEnv, StateDb};
 pub use sei::*; // TODO(willem): Define and restrict public API
-
-pub struct SeiEvmInput {
-    block: BlockInput<SeiEvmFactory>,
-}
-
-impl SeiEvmInput {
-    pub fn new(block: BlockInput<SeiEvmFactory>) -> Self {
-        Self { block }
-    }
-}
-
-impl SeiEvmInput {
-    #[inline]
-    pub fn into_env(self, chain_spec: &SeiChainSpec) -> EvmEnv<StateDb, SeiEvmFactory, Commitment> {
-        self.block.into_env(chain_spec)
-    }
-}

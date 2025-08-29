@@ -18,15 +18,12 @@ use std::{fmt::Debug, sync::LazyLock};
 
 use alloy::{
     providers::{ext::AnvilApi, Provider, ProviderBuilder},
-    rpc::types::TransactionRequest,
     uint,
 };
 use alloy_evm::revm::primitives::hardfork::SpecId;
-use alloy_primitives::{address, b256, bytes, hex, keccak256, Address, Bytes, U256};
+use alloy_primitives::{address, Address, U256};
 use risc0_sei_steel::SeiEvmEnv;
-use risc0_steel::{
-    account::AccountInfo, config::ChainSpec, ethereum::EthEvmEnv, Account, Contract,
-};
+use risc0_steel::config::ChainSpec;
 
 pub static ANVIL_CHAIN_SPEC: LazyLock<ChainSpec<SpecId>> =
     LazyLock::new(|| ChainSpec::new_single(31337, SpecId::CANCUN));
@@ -154,7 +151,11 @@ mod event {
 
         let mut env = SeiEvmEnv::builder()
             .provider(provider)
+            .tendermint_rpc("")
+            .unwrap()
             .chain_spec(&ANVIL_CHAIN_SPEC)
+            .block_number(10)
+            .commitment_block_number(20)
             .build()
             .await
             .unwrap();
@@ -195,7 +196,7 @@ mod event {
         let pending = contract.testEvent(U256::ZERO).send().await.unwrap();
         pending.watch().await.unwrap();
 
-        let mut env = EthEvmEnv::builder()
+        let mut env = SeiEvmEnv::builder()
             .provider(provider)
             .chain_spec(&ANVIL_CHAIN_SPEC)
             .build()

@@ -16,14 +16,14 @@ use alloy::{
     network::Ethereum,
     providers::{Provider, ProviderBuilder, RootProvider},
 };
-use alloy_primitives::{Address, Sealable};
-use anyhow::{Context, Result};
+use alloy_primitives::{BlockHash, BlockNumber};
+use anyhow::Result;
 use risc0_steel::{
     host::{
         db::{ProofDb, ProviderDb},
         BlockNumberOrTag, EvmEnvBuilder, HostCommit,
     },
-    BlockHeaderCommit, Commitment, ComposeInput, EvmEnv, EvmInput,
+    EvmEnv, EvmInput,
 };
 use std::{
     marker::PhantomData,
@@ -32,10 +32,12 @@ use std::{
 use tendermint_rpc::{Error, HttpClient as TendermintClient, HttpClientUrl};
 use url::Url;
 
-use crate::{tendermint::TendermintCommitment, SeiChainSpec, SeiEvmFactory, SeiEvmInput};
+use crate::{
+    tendermint::{TendermintCommitment, TendermintInput},
+    SeiChainSpec, SeiEvmFactory, SeiEvmInput,
+};
 
 type HostSeiEvmEnv<P2, C> = SeiEvmEnv<ProofDb<ProviderDb<Ethereum, P2>>, C>;
-
 /// Wrapped [EvmEnv] for Sei chain.
 pub struct SeiEvmEnv<D, C> {
     /// Underlying generic environment without a specific commitment.
@@ -113,7 +115,7 @@ impl<T> SeiEvmEnvBuilder<PreProviderStage, (), (), T> {
         self.provider(ProviderBuilder::default().connect_http(url))
     }
 
-    /// Sets the Sei [Provider] that will be used by the [SeiEvmEnv].
+    /// Sets the [Provider] that will be used by the [SeiEvmEnv].
     pub fn provider<P2>(self, provider: P2) -> SeiEvmEnvBuilder<ProviderStage, P2, (), T>
     where
         P2: Provider<Ethereum> + Clone,
@@ -127,27 +129,95 @@ impl<T> SeiEvmEnvBuilder<PreProviderStage, (), (), T> {
     }
 }
 
+impl<P2, Spec, T> SeiEvmEnvBuilder<ProviderStage, P2, Spec, T> {
+    pub fn block_number(self, number: u64) -> Self {
+        Self {
+            inner: self.inner.block_number(number),
+            tendermint_client: self.tendermint_client,
+            stage: self.stage,
+        }
+    }
+
+    pub fn block_number_or_tag(self, block: BlockNumberOrTag) -> Self {
+        Self {
+            inner: self.inner.block_number_or_tag(block),
+            tendermint_client: self.tendermint_client,
+            stage: self.stage,
+        }
+    }
+}
+
 // Callable only without a provider
-impl<P2> SeiEvmEnvBuilder<PreProviderStage, P2, (), ()> {
-    /// Sets the Sei HTTP RPC endpoint that will be used by the [SeiEvmEnv].
+impl<P2, Spec> SeiEvmEnvBuilder<ProviderStage, P2, Spec, ()> {
+    /// Sets the Sei Tendermint RPC endpoint that will be used by the [SeiEvmEnv].
     pub fn tendermint_rpc<U>(
         self,
         url: U,
-    ) -> Result<SeiEvmEnvBuilder<ProviderStage, P2, (), TendermintClient>>
+    ) -> Result<SeiEvmEnvBuilder<ProviderStage, P2, Spec, TendermintClient>>
     where
         U: TryInto<HttpClientUrl, Error = Error>,
     {
         Ok(self.tendermint_provider(TendermintClient::new(url)?))
     }
 
-    /// Sets the Sei [Provider] that will be used by the [SeiEvmEnv].
+    /// Sets the Sei [TendermintClient] that will be used by the [SeiEvmEnv].
     pub fn tendermint_provider(
         self,
         provider: TendermintClient,
-    ) -> SeiEvmEnvBuilder<ProviderStage, P2, (), TendermintClient> {
+    ) -> SeiEvmEnvBuilder<ProviderStage, P2, Spec, TendermintClient> {
         SeiEvmEnvBuilder {
             inner: self.inner,
             tendermint_client: provider,
+            stage: PhantomData,
+        }
+    }
+}
+
+/// A Block Identifier.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum BlockId {
+    /// A block hash
+    Hash(BlockHash),
+    /// A block number or tag (e.g. latest)
+    Number(BlockNumberOrTag),
+}
+
+// Set the commitment block for history proofs
+impl<P2, Spec> SeiEvmEnvBuilder<ProviderStage, P2, Spec, TendermintClient> {
+    /// Sets the block number for the commitment.
+    ///
+    /// See [EvmEnvBuilder::commitment_block_hash] for detailed documentation.
+    pub fn commitment_block_number(
+        self,
+        number: BlockNumber,
+    ) -> SeiEvmEnvBuilder<ProviderStage, P2, Spec, TendermintClient> {
+        self.commitment_block_number_or_tag(BlockNumberOrTag::Number(number))
+    }
+
+    pub fn commitment_block_hash(
+        self,
+        hash: BlockHash,
+    ) -> SeiEvmEnvBuilder<ProviderStage, P2, Spec, TendermintClient> {
+        self.commitment_block(BlockId::Hash(hash))
+    }
+
+    /// Sets the block number or block tag ("latest", "earliest", "pending")  for the commitment.
+    ///
+    /// See [EvmEnvBuilder::commitment_block_hash] for detailed documentation.
+    pub fn commitment_block_number_or_tag(
+        self,
+        block: BlockNumberOrTag,
+    ) -> SeiEvmEnvBuilder<ProviderStage, P2, Spec, TendermintClient> {
+        self.commitment_block(BlockId::Number(block))
+    }
+
+    fn commitment_block(
+        self,
+        block: BlockId,
+    ) -> SeiEvmEnvBuilder<ProviderStage, P2, Spec, TendermintClient> {
+        SeiEvmEnvBuilder {
+            inner: self.inner,
+            tendermint_client: self.tendermint_client,
             stage: PhantomData,
         }
     }
@@ -175,7 +245,7 @@ impl<P2> SeiEvmEnvBuilder<ProviderStage, P2, &SeiChainSpec, TendermintClient> {
     {
         Ok(SeiEvmEnv {
             inner: self.inner.build().await?,
-            commit: TendermintCommitment::new(),
+            commit: TendermintCommitment::default(), // TODO(willem): build using the tendermint client
         })
     }
 }
@@ -190,6 +260,20 @@ where
             unreachable!()
         };
 
-        Ok(SeiEvmInput::new(input))
+        Ok(input)
+    }
+}
+
+impl<P2> HostSeiEvmEnv<P2, TendermintCommitment>
+where
+    P2: Provider<Ethereum>,
+{
+    pub async fn into_input(self) -> Result<TendermintInput<SeiEvmFactory>> {
+        // the inner environment has no specific commitment, so it will always return a block input
+        let EvmInput::Block(input) = self.inner.into_input().await? else {
+            unreachable!()
+        };
+        // compose with the tendermint commitment
+        Ok(TendermintInput::new(input, self.commit))
     }
 }

@@ -15,14 +15,10 @@
 use risc0_steel::{ethereum::EthBlockHeader, BlockHeaderCommit, Commitment, ComposeInput};
 use serde::{Deserialize, Serialize};
 
-/// A commitment to a field of the Tendermint block at a specific index in a Merkle tree, along with the slot of the block
 #[derive(Default, Clone, Serialize, Deserialize)]
-pub struct TendermintCommitment {
-    slot: u64,
-    proof: Vec<u8>,
-}
+pub struct HistoryCommitment {}
 
-impl BlockHeaderCommit<EthBlockHeader> for TendermintCommitment {
+impl BlockHeaderCommit<EthBlockHeader> for HistoryCommitment {
     fn commit(
         self,
         header: &alloy_primitives::Sealed<EthBlockHeader>,
@@ -32,4 +28,4 @@ impl BlockHeaderCommit<EthBlockHeader> for TendermintCommitment {
     }
 }
 
-pub type TendermintInput<F> = ComposeInput<F, TendermintCommitment>;
+pub type HistoryInput<F> = ComposeInput<F, HistoryCommitment>;
